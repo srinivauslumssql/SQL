@@ -1,0 +1,93 @@
+1.	DB ROLE assigned to SQL/AD Logins
+2.	OBJECT LEVEL PERMISSION
+3.	SCHEMA LEVEL PERMISSIONS
+
+The entire script need to executed together find the script below 
+
+--DB ROLE assigned to SQL/AD Logins--
+
+SELECT distinct
+   
+    [DatabaseUserName] = memberprinc.[name],   
+                [DatabaseName] = DB_NAME(),
+    [Role] = roleprinc.[name], 
+                [Schema] = QUOTENAME(SCHEMA_NAME(obj.schema_id)),     
+    [PermissionType] = perm.[permission_name],       
+    [PermissionState] = perm.[state_desc],       
+    [ObjectType] = obj.type_desc,--perm.[class_desc],   
+    [ObjectName] = OBJECT_NAME(perm.major_id),
+    [ColumnName] = col.[name]
+FROM    
+    --Role/member associations
+    sys.database_role_members members
+JOIN
+    --Roles
+    sys.database_principals roleprinc ON roleprinc.[principal_id] = members.[role_principal_id]
+JOIN
+    --Role members (database users)
+    sys.database_principals memberprinc ON memberprinc.[principal_id] = members.[member_principal_id]
+LEFT JOIN
+    --Login accounts
+    sys.login_token ulogin on memberprinc.[sid] = ulogin.[sid]
+LEFT JOIN        
+    --Permissions
+    sys.database_permissions perm ON perm.[grantee_principal_id] = roleprinc.[principal_id]
+LEFT JOIN
+    --Table columns
+    sys.columns col on col.[object_id] = perm.major_id 
+                    AND col.[column_id] = perm.[minor_id]
+LEFT JOIN
+    sys.objects obj ON perm.[major_id] = obj.[object_id]
+
+--OBJECT LEVEL PERMISSION--
+
+SELECT  
+       [DatabaseUserName] = QUOTENAME(USER_NAME(usr.principal_id)) COLLATE database_default,
+                   [DatabaseName] = DB_NAME(),
+                    [Role] = null,
+                                [Schema] = QUOTENAME(SCHEMA_NAME(obj.schema_id)),
+                   [PermissionType] = perm.permission_name ,
+                   [PermissionState] = perm.[state_desc],
+                  
+                          
+                    [ObjectType] = obj.type_desc,--perm.[class_desc],   
+                    [ObjectName] = QUOTENAME(obj.name) 
+        ,[ColumnName]  =  QUOTENAME(cl.name) 
+                
+FROM    
+    sys.database_permissions AS perm
+        INNER JOIN
+    sys.objects AS obj
+            ON perm.major_id = obj.[object_id]
+        INNER JOIN
+    sys.database_principals AS usr
+            ON perm.grantee_principal_id = usr.principal_id
+                                                INNER JOIN 
+                sys.database_role_members members
+                                                ON members.[member_principal_id] = usr.principal_id
+                                inner JOIN
+    --Roles
+    sys.database_principals roleprinc ON roleprinc.[principal_id] = members.[role_principal_id]
+        LEFT JOIN
+    sys.columns AS cl
+            ON cl.column_id = perm.minor_id AND cl.[object_id] = perm.major_id
+
+-- SCHEMA LEVEL PERMISSIONS --
+
+SELECT  
+   [DatabaseUserName] = (USER_NAME(grantee_principal_id)) COLLATE database_default,
+   [DatabaseName] = DB_NAME(),
+                [Role] = null,
+           [Schema] = QUOTENAME(SCHEMA_NAME(major_id)),
+             [PermissionType] = perm.permission_name,
+                                                [PermissionState] = perm.[state_desc],
+                                                [ObjectType] = NULL,   
+                    [ObjectName] = NULL
+        ,[ColumnName]  =  NULL
+             
+from sys.database_permissions AS perm
+    inner join sys.schemas s
+        on perm.major_id = s.schema_id
+    inner join sys.database_principals dbprin
+        on perm.grantee_principal_id = dbprin.principal_id
+WHERE class = 3 --class 3 = schema 

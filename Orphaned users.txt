@@ -1,0 +1,35 @@
+The problem is that the user in the database is an "orphan". 
+This means that there is no login id or password associated with the user. 
+
+
+
+-----EXEC sp_change_users_login 'Report'
+If you already have a login id and password for this user, fix it by doing:
+
+-------EXEC sp_change_users_login 'Auto_Fix', 'user'
+If you want to create a new login id and password for this user, fix it by doing:
+
+-------EXEC sp_change_users_login 'Auto_Fix', 'user', 'login', 'password'
+-----TO FIND AND FIX ORPHAN USERS IN SQL SERVER
+
+SP_CHANGE_USERS_LOGIN 'REPORT'
+
+SP_CHANGE_USERS_LOGIN 'UPDATE_ONE', 'USERNAME','LOGINNAME'
+
+
+
+First, make sure that this is the problem. This will lists the orphaned users:
+
+EXEC sp_change_users_login 'Report'
+
+If you already have a login id and password for this user, fix it by doing:
+
+EXEC sp_change_users_login 'Auto_Fix', 'user'
+
+If you want to create a new login id and password for this user, fix it by doing:
+
+EXEC sp_change_users_login 'Auto_Fix', 'user', 'login', 'password'
+
+EXEC sp_change_users_login 'Auto_Fix', 'user', Null, 'password'
+
+sp_change_users_login 'update_one','Person','person'

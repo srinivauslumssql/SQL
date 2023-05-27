@@ -1,0 +1,237 @@
+set nocount on
+if (select object_id('tempdb.dbo.RestoreUserSyntax')) > 0
+	drop table tempdb.dbo.RestoreUserSyntax
+if (select object_id('tempdb.dbo.RestoreUserSyntax1')) > 0
+	drop table tempdb.dbo.RestoreUserSyntax1
+go
+
+Declare @RemoveExistingUsers int
+set @RemoveExistingUsers = 0	-- Set to 0 if you do not want to remove users after a database refresh (test to Prod it should be 1 and from prod to test it can be 0)
+
+declare @dbname nvarchar(512) 
+select @dbname = DB_NAME()
+declare @Recovery varchar(100)
+
+if( @dbname <> 'master' and @dbname <> 'tempdb' and @dbname <> 'msdb' and @dbname <> 'model' )
+	begin
+
+		declare @version int
+
+		set @version = (select cast(substring(CAST(serverproperty('ProductVersion') as varchar(50)), 1,patindex('%.%',CAST(serverproperty('ProductVersion') as varchar(50)))-1 ) as int))
+		Set @Recovery = (select cast(databasepropertyex(@dbname, 'Recovery') as varchar(100)))
+		--select @version
+
+		create table tempdb.dbo.RestoreUserSyntax 
+			(
+			CatagoryID int identity(1,1),
+			syntax varchar(4000)
+			)
+		create table tempdb.dbo.RestoreUserSyntax1 
+			(
+			CatagoryID int identity(1,1),
+			syntax varchar(4000)
+			)
+		If @version = 8
+			Begin
+				-- Extract Current Database
+				insert into tempdb.dbo.RestoreUserSyntax1 select 'use ['+DB_NAME()+']'
+				insert into tempdb.dbo.RestoreUserSyntax1 select 'go'
+				
+				If @RemoveExistingUsers = 1	-- If 1 remove existing users first 
+					Begin	
+						insert into tempdb.dbo.RestoreUserSyntax1 select 'set nocount on Declare @exec1 varchar(2000) DECLARE DPusers CURSOR FOR    '
+						insert into tempdb.dbo.RestoreUserSyntax1 select 'select ''if not exists (select name name from sysobjects where uid = USER_ID(''''''+name+'''''')) exec sp_revokedbaccess [''+name+'']'' from sysusers where not islogin = 0 and not (issqlrole = 1 or isapprole =1) and uid > 3    FOR READ ONLY  '
+						insert into tempdb.dbo.RestoreUserSyntax1 select 'OPEN DPusers FETCH NEXT FROM DPusers INTO    @exec1 WHILE @@FETCH_STATUS = 0	BEGIN 		exec(@exec1)		FETCH NEXT FROM DPusers INTO		@exec1	End CLOSE DPusers DEALLOCATE DPusers'
+						insert into tempdb.dbo.RestoreUserSyntax1 select 'go'
+
+					End
+				
+				-- Extract Database Owner
+				insert into tempdb.dbo.RestoreUserSyntax1 select 'exec sp_changedbowner ['+case when rtrim(SUSER_SNAME([sid])) is null then 'sa' else rtrim(SUSER_SNAME(sid)) end+']' from master.dbo.sysdatabases where name=DB_NAME()
+				insert into tempdb.dbo.RestoreUserSyntax1 select 'go'
+				insert into tempdb.dbo.RestoreUserSyntax1 select 'ALTER DATABASE ['+@dbname+'] SET RECOVERY '+@Recovery+' with no_wait'
+				insert into tempdb.dbo.RestoreUserSyntax1 select 'go'
+				
+				-- Extract Database Roles
+				create table #dbrole
+				(
+				RoleName varchar(300),
+				RoleID int,
+				IsAppRole int
+				)
+				insert into #dbrole exec sp_helprole
+				insert into tempdb.dbo.RestoreUserSyntax select 'if not exists (select name from sysusers where issqlrole =1 and name = '''+a.RoleName+''') Exec sp_addrole ['+a.RoleName+']' from #dbrole a, sysusers b where a.RoleID=b.uid and b.issqlrole =1
+				drop table #dbrole
+				
+				-- Extract Application Roles with a password of 'password'
+				create table #approle2000
+				(
+				RoleName varchar(300),
+				RoleID int,
+				IsAppRole int
+				)
+				insert into #approle2000 exec sp_helprole
+				insert into tempdb.dbo.RestoreUserSyntax select 'if not exists (select name from sysusers where isapprole =1 and name = '''+a.RoleName+''') Exec sp_addapprole ['+a.RoleName+'], @Password = N''password''' from #approle2000 a, sysusers b where a.RoleID=b.uid and b.isapprole =1
+				drop table #approle2000
+
+				-- Extract Users
+				insert into tempdb.dbo.RestoreUserSyntax select 'if not exists (select name from sysusers where isapprole =0 and name = '''+b.Name+''') Exec sp_grantdbaccess ['+suser_sname(b.sid)+'],['+b.Name+']' from sysusers b where b.isapprole =0 and b.name not in ('dbo','guest') and rtrim(SUSER_SNAME([sid])) is not null and b.altuid <> 1
+
+				-- Sync User Extract
+				insert into tempdb.dbo.RestoreUserSyntax select 'if (select rtrim(SUSER_SNAME([sid])) from sysusers where name = '''+name+''') <> '''+isnull(rtrim(SUSER_SNAME([sid])),name)+''' exec sp_change_users_login ' + '''' + 'Update_One' + '''' + ',' + '''' +  name + '''' + ' ,' + '''' + isnull(rtrim(SUSER_SNAME([sid])),name) + '''' FROM sysusers where islogin = 1 and issqluser = 1 and name not in ('guest','dbo')
+
+				-- Add Group/Role membership
+				insert into tempdb.dbo.RestoreUserSyntax select distinct 'if exists (select name from sysusers where isapprole =0 and name = '''+user_name(memberuid)+''') EXEC sp_addrolemember ['+user_name(groupuid)+'] , ['+user_name(memberuid)+'] ' from sysmembers where not user_name(groupuid) = 'public' and not user_name(memberuid) = 'dbo'
+				
+			End
+			
+			
+		If @version > 8
+			Begin
+				-- Extract Current Database
+				insert into tempdb.dbo.RestoreUserSyntax1 select 'use ['+DB_NAME()+']'
+				insert into tempdb.dbo.RestoreUserSyntax1 select 'go'
+				
+				If @RemoveExistingUsers = 1	-- If 1 remove existing users first 
+					Begin
+						insert into tempdb.dbo.RestoreUserSyntax1 select 'set nocount on Declare @exec1 varchar(2000) DECLARE DPusers CURSOR FOR    '
+						insert into tempdb.dbo.RestoreUserSyntax1 select 'select ''if not exists (select name from sys.schemas where principal_id = USER_ID(''''''+name+'''''')) drop user [''+name+'']'' from sys.sysusers where not islogin = 0 and not (issqlrole = 1 or isapprole =1) and uid > 4    FOR READ ONLY  '
+						insert into tempdb.dbo.RestoreUserSyntax1 select 'OPEN DPusers FETCH NEXT FROM DPusers INTO    @exec1 WHILE @@FETCH_STATUS = 0	BEGIN 		exec(@exec1)		FETCH NEXT FROM DPusers INTO		@exec1	End CLOSE DPusers DEALLOCATE DPusers'
+						insert into tempdb.dbo.RestoreUserSyntax1 select 'go'
+					End
+					
+				-- Extract Database Owner
+				insert into tempdb.dbo.RestoreUserSyntax1 select 'exec sp_changedbowner ['+case when rtrim(SUSER_SNAME(sid)) is null then 'sa' else rtrim(SUSER_SNAME(sid)) end+']' from master.sys.sysdatabases where name=DB_NAME()
+				insert into tempdb.dbo.RestoreUserSyntax1 select 'go'
+				insert into tempdb.dbo.RestoreUserSyntax1 select 'ALTER DATABASE ['+@dbname+'] SET RECOVERY '+@Recovery+' with no_wait'
+				insert into tempdb.dbo.RestoreUserSyntax1 select 'go'
+				
+				-- Extract Database Roles
+				declare @roleID int, @Rolename1 varchar(255), @rolename2 varchar(255), @userID int
+				DECLARE sync_update CURSOR FOR
+				select a.uid, a.name, a.altuid 
+				from sys.sysusers a
+				where a.issqlrole = 1 and not a.name = 'dbo'
+				FOR READ ONLY
+
+				OPEN sync_update
+
+				loop2:
+				FETCH NEXT FROM sync_update INTO
+				@roleID,
+				@RoleName1,
+				@userID
+		    
+				IF @@fetch_status <> 0
+				GOTO _loop2
+
+				select @RoleName2 = (select name from sys.sysusers where uid = @userID)
+				insert into tempdb.dbo.RestoreUserSyntax Select 'if not exists (select name from sys.sysusers where name = '''+@RoleName1+''') Create Role ['+@RoleName1+'] AUTHORIZATION ['+@RoleName2+']'
+				GOTO loop2
+				_loop2:
+				CLOSE sync_update
+				DEALLOCATE sync_update
+
+				-- Extract Application Roles with a password of 'password'
+				create table #approle
+				(
+				UserName varchar(300),
+				RoleName varchar(300),
+				LoginName varchar(500) null,
+				DefDBName varchar(300) null,
+				DefSchemaName varchar(300) null,
+				UserID int,
+				Sid nvarchar(200) null
+				)
+				insert into #approle exec sp_helpuser
+				insert into tempdb.dbo.RestoreUserSyntax select 'if not exists (select name from sys.sysusers where isapprole =1 and name = '''+a.UserName+''') Create APPLICATION ROLE ['+a.UserName+'] WITH DEFAULT_SCHEMA = ['+a.DefSchemaName+'], PASSWORD = N''password''' from #approle a, sys.sysusers b where a.UserID=b.uid and b.isapprole =1
+				drop table #approle
+
+				-- Extract Users
+				create table #user
+				(
+				UserName varchar(300),
+				RoleName varchar(300),
+				LoginName varchar(500) null,
+				DefDBName varchar(300) null,
+				DefSchemaName varchar(300) null,
+				UserID int,
+				Sid nvarchar(200) null
+				)
+				insert into #user exec sp_helpuser
+				insert into tempdb.dbo.RestoreUserSyntax select distinct 'if not exists (select name from sys.sysusers where isapprole =0 and name = '''+a.UserName+''') Create User ['+a.UserName+'] FOR LOGIN ['+case when suser_sname(b.sid) is not null then suser_sname(b.sid) when suser_sname(b.sid) is null and suser_sid(b.name) is not null then suser_Sname(suser_sid(b.name)) end +'] '+case when a.DefSchemaName is null then '' else 'WITH DEFAULT_SCHEMA = ['+a.DefSchemaName+']' end from #user a, sys.sysusers b where a.UserID=b.uid and b.isapprole =0 and b.uid >4 and b.uid< 16384
+				
+				-- Sync User Extract
+				insert into tempdb.dbo.RestoreUserSyntax select 'if (select rtrim(SUSER_SNAME([sid])) from sys.database_principals where name = '''+name+''') <> '''+isnull(rtrim(SUSER_SNAME([sid])),name)+''' exec sp_change_users_login ' + '''' + 'Update_One' + '''' + ',' + '''' +  name + '''' + ' ,' + '''' + isnull(rtrim(SUSER_SNAME([sid])),name) + '''' FROM sys.sysusers where islogin = 1 and issqluser = 1 and (uid > 4)
+				
+				insert into tempdb.dbo.RestoreUserSyntax select distinct 'if exists (select name from sys.sysusers where isapprole =0 and name = '''+a.UserName+''') EXEC sp_addrolemember ['+a.RoleName+'] , ['+a.UserName+'] ' from #user a, sys.sysusers b where a.UserID=b.uid and b.isapprole =0 and b.uid >4 and a.LoginName is not null and not a.Rolename = 'public'
+				drop table #user
+				
+			End
+			
+		-- Extract Database Permissions
+		Create table #protect
+			(
+			Owner varchar(300),
+			Object varchar(300),
+			Grantee varchar(300),
+			Grantor varchar(300),
+			ProtectType varchar(20),
+			Action varchar(100),
+			[Column] varchar(100) null
+			)
+
+		insert into #protect exec sp_helprotect
+
+		insert into tempdb.dbo.RestoreUserSyntax select
+		(case when RTRIM(Owner) <> '.' and RTRIM(Object)<> '.' then 'If (select object_id(''['+RTRIM(Owner)+'].['+RTRIM(Object)+']'')) > 0' else '' end)
+		+' '+ 
+		rtrim(case when ProtectType = 'Grant_WGO' then 'Grant' else ProtectType end)
+		+' '+
+		Action 
+		+(case when RTRIM(Owner) <> '.' and RTRIM(Object)<> '.' then ' on ['+RTRIM(Owner)+'].['+RTRIM(Object)+']' else '' end)
+		+' to ['+
+		rtrim(Grantee)
+		+'] '+
+		RTRIM(case when ProtectType = 'Grant_WGO' then 'With Grant Option' else '' end)
+		from #protect where not [Action] = 'Connect' 
+		drop table #protect
+		--select * from tempdb.dbo.RestoreUserSyntax	--debug
+
+		Declare @exec varchar(4000)
+		Declare @CatID smallint
+		Begin
+		DECLARE sync_update CURSOR FOR
+			select syntax
+			from tempdb.dbo.RestoreUserSyntax order by CatagoryID
+			FOR READ ONLY
+
+		  OPEN sync_update
+
+		loop3:
+		  FETCH NEXT FROM sync_update INTO
+			@exec
+		 WHILE @@FETCH_STATUS = 0
+			BEGIN   
+			--select @exec1
+			insert into tempdb.dbo.RestoreUserSyntax1 select @exec
+			insert into tempdb.dbo.RestoreUserSyntax1 select 'go'
+		  FETCH NEXT FROM sync_update INTO
+			@exec
+			END
+		  CLOSE sync_update
+		  DEALLOCATE sync_update
+		end
+	END
+ Else
+	RAISERROR('*** You are "using"/in a system database, Script needs to be executed in the database you are restoring over ***',16,1)
+go
+if (select object_id('tempdb.dbo.RestoreUserSyntax')) > 0
+	drop table tempdb.dbo.RestoreUserSyntax
+if (select object_id('tempdb.dbo.RestoreUserSyntax1')) > 0
+	Begin
+		select syntax from tempdb.dbo.RestoreUserSyntax1 where syntax != 'NULL' order by CatagoryID
+		drop table tempdb.dbo.RestoreUserSyntax1
+	End
+
+go
